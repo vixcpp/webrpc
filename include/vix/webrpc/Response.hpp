@@ -10,19 +10,7 @@
  *  Use of this source code is governed by a MIT license
  *  that can be found in the LICENSE file.
  *
- * ====================================================================
- * Vix.cpp - WebRPC
- * ====================================================================
- * Purpose:
- *   Transport-agnostic RPC response envelope.
- *   - id:     echoes request id (string|int|null)
- *   - result: success payload (any token)
- *   - error:  structured error (RpcError)
- *
- * Rules:
- *   - result XOR error (never both)
- *   - id is optional (null for notifications / fire-and-forget)
- * ====================================================================
+ *  Vix.cpp
  */
 
 #ifndef VIX_WEBRPC_RESPONSE_HPP
@@ -39,26 +27,55 @@
 namespace vix::webrpc
 {
   /**
-   * @brief WebRPC response envelope.
+   * @brief Transport-agnostic WebRPC response envelope.
+   *
+   * @details
+   * `RpcResponse` represents the result of an RPC call as an explicit value:
+   * - a success payload (`result`)
+   * - or a structured error (`error`)
+   *
+   * The envelope is independent from any transport (HTTP, WebSocket, P2P, CLI),
+   * making it usable by beginners (simple shape) and reliable for experts
+   * (explicit rules, no exceptions).
    *
    * Expected JSON shape (object):
+   *
    * Success:
+   * @code
    * { "id": <id|null>, "result": <any> }
+   * @endcode
    *
    * Error:
-   * { "id": <id|null>, "error": { "code": <string>, "message": <string>, "details": <any?> } }
+   * @code
+   * { "id": <id|null>, "error": { "code": "<string>", "message": "<string>", "details": <any?> } }
+   * @endcode
+   *
+   * Rules:
+   * - `result` XOR `error` (never both)
+   * - `id` is optional and may be null (common for notifications / fire-and-forget)
    */
   struct RpcResponse
   {
+    /// Echo of the request id (allowed: null|string|int).
     vix::json::token id{nullptr};
 
-    // Exactly one branch should be active.
+    /// Success payload (valid only when has_error == false).
     vix::json::token result{nullptr};
+
+    /// Error payload (valid only when has_error == true).
     RpcError error{};
+
+    /// True if this response represents an error.
     bool has_error{false};
 
     RpcResponse() = default;
 
+    /**
+     * @brief Build a success response.
+     *
+     * @param id_     Request id (may be null).
+     * @param result_ Success payload.
+     */
     static RpcResponse ok(vix::json::token id_, vix::json::token result_)
     {
       RpcResponse r;
@@ -69,6 +86,12 @@ namespace vix::webrpc
       return r;
     }
 
+    /**
+     * @brief Build an error response.
+     *
+     * @param id_  Request id (may be null).
+     * @param err  Structured error.
+     */
     static RpcResponse fail(vix::json::token id_, RpcError err)
     {
       RpcResponse r;
@@ -79,15 +102,16 @@ namespace vix::webrpc
       return r;
     }
 
+    /// True if id is null (typically a notification).
     bool is_notification() const noexcept { return id.is_null(); }
+
+    /// True if this response is a success response.
     bool ok() const noexcept { return !has_error; }
 
-    // ------------------------------------------------------------
-    // Serialization
-    // ------------------------------------------------------------
-
     /**
-     * @brief Convert response to vix::json::token (object).
+     * @brief Serialize this response to a JSON object token.
+     *
+     * @return A `vix::json::token` holding {id, result} or {id, error}.
      */
     vix::json::token to_json() const
     {
@@ -111,20 +135,21 @@ namespace vix::webrpc
       });
     }
 
-    // ------------------------------------------------------------
-    // Parsing
-    // ------------------------------------------------------------
-
     /**
-     * @brief Parse a RpcResponse from a vix::json::token.
+     * @brief Parse an RpcResponse from a JSON token.
      *
-     * Returns:
-     * - RpcResponse on success
-     * - RpcError on malformed envelope (PARSE_ERROR / INVALID_PARAMS)
+     * @param root Input JSON token.
+     * @return On success: `RpcResponse`. On failure: `RpcError` (PARSE_ERROR / INVALID_PARAMS).
      *
-     * Notes:
-     * - We validate: id type, XOR rule (result vs error),
-     *   and error shape using RpcError::parse().
+     * @details
+     * Validation performed:
+     * - root must be an object
+     * - "id" if present must be null, string, or int (i64)
+     * - response must contain exactly one of: "result" or "error"
+     * - "error" is validated by `RpcError::parse()`
+     *
+     * @note
+     * This API is explicit and exception-free: callers must handle both cases.
      */
     static std::variant<RpcResponse, RpcError> parse(const vix::json::token &root)
     {
@@ -136,7 +161,6 @@ namespace vix::webrpc
 
       const kvs &o = *objp;
 
-      // id (optional: null|string|int)
       token id_tok{nullptr};
       if (const token *idp = o.get_ptr("id"))
       {
@@ -148,20 +172,17 @@ namespace vix::webrpc
       const token *res_p = o.get_ptr("result");
       const token *err_p = o.get_ptr("error");
 
-      // result XOR error
       if (res_p && err_p)
         return RpcError::invalid_params("response cannot contain both result and error");
 
       if (!res_p && !err_p)
         return RpcError::invalid_params("response must contain result or error");
 
-      // error branch
       if (err_p)
       {
-        // Let RpcError validate its own schema
         const auto pr = RpcError::parse(*err_p);
         if (!pr.ok())
-          return pr.error(); // malformed error object -> return parse_error RpcError
+          return pr.error();
 
         RpcResponse out;
         out.id = std::move(id_tok);
@@ -171,10 +192,9 @@ namespace vix::webrpc
         return out;
       }
 
-      // success branch
       RpcResponse out;
       out.id = std::move(id_tok);
-      out.result = *res_p; // copy token
+      out.result = *res_p;
       out.error = RpcError{};
       out.has_error = false;
       return out;

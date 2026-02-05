@@ -10,18 +10,7 @@
  *  Use of this source code is governed by a MIT license
  *  that can be found in the LICENSE file.
  *
- * ====================================================================
- * Vix.cpp - WebRPC
- * ====================================================================
- * Purpose:
- *   Structured RPC error model for WebRPC.
- *   - Explicit error codes
- *   - Human-readable messages
- *   - Optional JSON details (vix::json::Simple token)
- *
- *   This type is transport-agnostic and can be serialized
- *   over HTTP or WebSocket.
- * ====================================================================
+ *  Vix.cpp
  */
 
 #ifndef VIX_WEBRPC_ERROR_HPP
@@ -35,30 +24,39 @@
 
 namespace vix::webrpc
 {
-  struct RpcErrorParseResult; // defined after RpcError (avoids incomplete-type issues)
+  struct RpcErrorParseResult;
 
   /**
-   * @brief Structured WebRPC error.
+   * @brief Structured error returned by a WebRPC call.
    *
-   * An RpcError represents a failure in an RPC call.
-   * Errors are explicit and must be returned as part of the RPC response (never thrown).
+   * @details
+   * `RpcError` represents an explicit failure in an RPC operation.
+   * Errors are **values**, not exceptions, and must be returned as part
+   * of an RPC response.
    *
-   * JSON shape:
+   * JSON representation:
+   * @code
    * {
-   *   "code":    <string>,
-   *   "message": <string>,
-   *   "details": <any?>      // optional
+   *   "code":    "<string>",
+   *   "message": "<string>",
+   *   "details": <any?>   // optional
    * }
+   * @endcode
+   *
+   * @note
+   * - `code` is machine-readable and stable.
+   * - `message` is human-readable.
+   * - `details` is optional and may contain structured data.
    */
   struct RpcError
   {
-    /// Machine-readable error code (example: "METHOD_NOT_FOUND")
+    /// Machine-readable error code (e.g. "METHOD_NOT_FOUND").
     std::string code{};
 
-    /// Human-readable description
+    /// Human-readable error description.
     std::string message{};
 
-    /// Optional structured details (JSON-like token)
+    /// Optional structured details.
     vix::json::token details{nullptr};
 
     RpcError() = default;
@@ -69,18 +67,23 @@ namespace vix::webrpc
     }
 
     RpcError(std::string code_, std::string message_, vix::json::token details_)
-        : code(std::move(code_)), message(std::move(message_)), details(std::move(details_))
+        : code(std::move(code_)),
+          message(std::move(message_)),
+          details(std::move(details_))
     {
     }
 
+    /// True if this error is valid (non-empty code).
     bool valid() const noexcept { return !code.empty(); }
+
+    /// True if this error contains structured details.
     bool has_details() const noexcept { return !details.is_null(); }
 
-    // ------------------------------------------------------------
-    // Serialization
-    // ------------------------------------------------------------
-
-    /// Convert error to JSON object (vix::json::Simple).
+    /**
+     * @brief Convert this error to a JSON object.
+     *
+     * @return A `vix::json::token` representing the error.
+     */
     vix::json::token to_json_token() const
     {
       using namespace vix::json;
@@ -105,26 +108,20 @@ namespace vix::webrpc
       });
     }
 
-    /// Alias kept for convenience.
+    /// Alias for to_json_token().
     vix::json::token to_json() const { return to_json_token(); }
 
-    // ------------------------------------------------------------
-    // Parsing
-    // ------------------------------------------------------------
-
     /**
-     * @brief Parse an RpcError from a token.
+     * @brief Parse an RpcError from a JSON token.
      *
-     * Returns:
-     * - ok():     true  -> value() is the parsed error
-     * - ok():     false -> error() is a PARSE_ERROR RpcError (with reason)
+     * @param root JSON token representing an error object.
+     * @return RpcErrorParseResult describing success or failure.
      */
     static RpcErrorParseResult parse(const vix::json::token &root);
 
-    // ------------------------------------------------------------
-    // Common errors (string codes for now, stable ABI)
-    // ------------------------------------------------------------
-
+    /**
+     * @brief Error: RPC method not found.
+     */
     static RpcError method_not_found(std::string_view method)
     {
       using namespace vix::json;
@@ -139,6 +136,9 @@ namespace vix::webrpc
       };
     }
 
+    /**
+     * @brief Error: invalid parameters.
+     */
     static RpcError invalid_params(std::string_view reason)
     {
       using namespace vix::json;
@@ -153,6 +153,9 @@ namespace vix::webrpc
       };
     }
 
+    /**
+     * @brief Error: malformed or invalid RPC payload.
+     */
     static RpcError parse_error(std::string_view reason)
     {
       using namespace vix::json;
@@ -167,6 +170,9 @@ namespace vix::webrpc
       };
     }
 
+    /**
+     * @brief Error: internal server failure.
+     */
     static RpcError internal_error(std::string_view msg)
     {
       return RpcError{
@@ -177,10 +183,11 @@ namespace vix::webrpc
   };
 
   /**
-   * @brief Result object for RpcError::parse().
+   * @brief Result type returned by RpcError::parse().
    *
-   * We intentionally do NOT use std::variant here, to avoid the "incomplete type"
-   * problem inside RpcError, and to keep call sites simple and explicit.
+   * @details
+   * This type avoids `std::variant` to keep the API explicit
+   * and to prevent incomplete-type issues during parsing.
    */
   struct RpcErrorParseResult
   {
@@ -206,18 +213,14 @@ namespace vix::webrpc
 
     bool ok() const noexcept { return ok_; }
 
-    /// Valid only if ok()==true
+    /// Valid only if ok() == true
     const RpcError &value() const noexcept { return value_; }
     RpcError &value() noexcept { return value_; }
 
-    /// Valid only if ok()==false
+    /// Valid only if ok() == false
     const RpcError &error() const noexcept { return error_; }
     RpcError &error() noexcept { return error_; }
   };
-
-  // ------------------------------------------------------------
-  // RpcError::parse() implementation (after RpcErrorParseResult is complete)
-  // ------------------------------------------------------------
 
   inline RpcErrorParseResult RpcError::parse(const vix::json::token &root)
   {

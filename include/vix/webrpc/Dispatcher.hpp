@@ -10,19 +10,7 @@
  *  Use of this source code is governed by a MIT license
  *  that can be found in the LICENSE file.
  *
- * ====================================================================
- * Vix.cpp - WebRPC
- * ====================================================================
- * Purpose:
- *   Request dispatcher for WebRPC.
- *
- *   - Accepts a raw vix::json::token (object or batch array)
- *   - Parses RpcRequest
- *   - Executes Router dispatch
- *   - Produces RpcResponse envelope (or no response for notifications)
- *
- *   Transport-agnostic.
- * ====================================================================
+ *  Vix.cpp
  */
 
 #ifndef VIX_WEBRPC_DISPATCHER_HPP
@@ -43,24 +31,44 @@
 namespace vix::webrpc
 {
   /**
-   * @brief Transport-agnostic dispatcher.
+   * @brief Transport-agnostic request dispatcher.
    *
-   * The Dispatcher is a thin layer:
-   * - parse -> dispatch -> envelope
-   * It does not own the Router.
+   * @details
+   * `Dispatcher` is a thin orchestration layer:
+   * - parse request envelope (`RpcRequest`)
+   * - dispatch to `Router`
+   * - wrap output into a response envelope (`RpcResponse`)
+   *
+   * It supports:
+   * - single call payloads (object)
+   * - batch payloads (array)
+   * - notifications (no id -> no response)
+   *
+   * @note
+   * `Dispatcher` does not own the router. It holds a reference and assumes the router
+   * outlives the dispatcher.
    */
   class Dispatcher
   {
   public:
+    /**
+     * @brief Construct a dispatcher bound to an existing router.
+     *
+     * @param router Router used to resolve and execute RPC methods.
+     */
     explicit Dispatcher(const Router &router) noexcept : router_(router) {}
 
     /**
-     * @brief Handle one payload (object or batch array).
+     * @brief Handle one payload (single call or batch).
      *
-     * Returns:
-     * - nullopt if it's a notification (or a batch of only notifications)
-     * - a token representing RpcResponse object
-     * - or a token representing an array of RpcResponse objects (batch)
+     * @param payload   Request token (object or array).
+     * @param transport Optional transport label (e.g. "http", "websocket", "p2p").
+     * @param meta      Optional metadata map (e.g. headers, peer id).
+     *
+     * @return
+     * - `std::nullopt` if the payload is a notification (or a batch of only notifications)
+     * - a token representing one `RpcResponse` object
+     * - or a token representing an array of `RpcResponse` objects (batch)
      */
     std::optional<vix::json::token> handle(
         const vix::json::token &payload,
@@ -78,37 +86,40 @@ namespace vix::webrpc
     }
 
     /**
-     * @brief Handle a single call (must be an object).
+     * @brief Handle a single call payload (request object).
      *
-     * Returns:
-     * - nullopt if notification (id is null)
-     * - RpcResponse otherwise
+     * @param payload   Request token (must be an object).
+     * @param transport Optional transport label.
+     * @param meta      Optional metadata map.
+     *
+     * @return
+     * - `std::nullopt` if the call is a notification (id is null)
+     * - `RpcResponse` otherwise
+     *
+     * @note
+     * If the envelope is malformed, an error response is returned with `id = null`,
+     * because there is no reliable id to echo back.
      */
     std::optional<RpcResponse> handle_one(
         const vix::json::token &payload,
         std::string_view transport = {},
         const Context::MetaMap *meta = nullptr) const
     {
-      // Parse request envelope
       auto parsed = RpcRequest::parse(payload);
       if (std::holds_alternative<RpcError>(parsed))
       {
-        // Parse/invalid envelope: no reliable id to echo.
         return RpcResponse::fail(vix::json::token{nullptr},
                                  std::get<RpcError>(std::move(parsed)));
       }
 
       RpcRequest req = std::get<RpcRequest>(std::move(parsed));
 
-      // Notification: no response at all
       if (req.id.is_null())
       {
-        // Still dispatch for side effects, ignore output.
         (void)router_.dispatch(req, transport, meta);
         return std::nullopt;
       }
 
-      // Dispatch
       auto out = router_.dispatch(req, transport, meta);
 
       if (std::holds_alternative<RpcError>(out))
@@ -123,11 +134,18 @@ namespace vix::webrpc
     /**
      * @brief Handle a batch payload (array of calls).
      *
-     * Spec behavior:
-     * - If payload is not an array -> PARSE_ERROR (but caller already checked is_array()).
-     * - If array is empty -> INVALID_PARAMS (empty batch).
-     * - Notifications produce no response entries.
-     * - If all are notifications -> nullopt.
+     * @param payload   Batch token (must be an array).
+     * @param transport Optional transport label.
+     * @param meta      Optional metadata map.
+     *
+     * @return
+     * - `std::nullopt` if all calls are notifications
+     * - otherwise an array token of response objects
+     *
+     * Rules:
+     * - empty batch is invalid (returns an error response with id = null)
+     * - non-object items produce an error response entry (id = null)
+     * - processing continues for remaining items (best-effort batch)
      */
     std::optional<vix::json::token> handle_batch(
         const vix::json::token &payload,
@@ -144,7 +162,6 @@ namespace vix::webrpc
         return err.to_json();
       }
 
-      // Empty batch is invalid (helps callers catch mistakes early)
       if (ap->elems.empty())
       {
         RpcResponse err = RpcResponse::fail(token{nullptr},
@@ -157,9 +174,6 @@ namespace vix::webrpc
 
       for (const auto &item : ap->elems)
       {
-        // Each item must be an object (request envelope).
-        // If not, we return an error response entry (id = null).
-        // We do NOT abort the entire batch; we keep processing.
         if (!item.is_object())
         {
           RpcResponse r = RpcResponse::fail(token{nullptr},
@@ -170,12 +184,11 @@ namespace vix::webrpc
 
         auto resp = handle_one(item, transport, meta);
         if (!resp.has_value())
-          continue; // notification
+          continue;
 
         out_arr.elems.push_back(resp->to_json());
       }
 
-      // If batch produced no responses, return nothing (all notifications)
       if (out_arr.elems.empty())
         return std::nullopt;
 

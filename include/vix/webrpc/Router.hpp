@@ -10,18 +10,7 @@
  *  Use of this source code is governed by a MIT license
  *  that can be found in the LICENSE file.
  *
- * ====================================================================
- * Vix.cpp - WebRPC
- * ====================================================================
- * Purpose:
- *   RPC method registry and dispatcher.
- *
- *   - Maps method name -> handler
- *   - Validates requests
- *   - Produces either result or RpcError
- *
- *   Transport-agnostic and synchronous by design.
- * ====================================================================
+ *  Vix.cpp
  */
 
 #ifndef VIX_WEBRPC_ROUTER_HPP
@@ -45,22 +34,36 @@ namespace vix::webrpc
   /**
    * @brief Result of an RPC handler.
    *
-   * - token  -> success
-   * - error  -> failure
+   * @details
+   * Handlers return either:
+   * - a JSON-like token (success payload)
+   * - or a structured RpcError (failure)
+   *
+   * This keeps control flow explicit and exception-free.
    */
   using RpcResult = std::variant<vix::json::token, RpcError>;
 
   /**
    * @brief RPC method handler signature.
    *
-   * Handlers:
-   * - receive an execution Context
-   * - return either a result token or an RpcError
+   * @details
+   * A handler receives an execution Context and returns an RpcResult.
+   * Handlers should validate their own input schema (params shape and types).
    */
   using RpcHandler = std::function<RpcResult(const Context &)>;
 
   /**
-   * @brief Registry and dispatcher for RPC methods.
+   * @brief Registry and dispatcher for WebRPC methods.
+   *
+   * @details
+   * `Router` maps method names to handlers and executes them synchronously.
+   * It is transport-agnostic (HTTP/WebSocket/P2P are integration concerns above this layer).
+   *
+   * Typical flow:
+   * - parse a raw request token into RpcRequest
+   * - validate and resolve a handler by method name
+   * - build a Context view
+   * - execute the handler
    */
   class Router
   {
@@ -68,13 +71,13 @@ namespace vix::webrpc
     Router() = default;
 
     /**
-     * @brief Register a new RPC method.
+     * @brief Register (or replace) an RPC method handler.
      *
-     * @param name     Method name (ex: "user.get")
-     * @param handler  Callable handling the method
+     * @param name    Method name (e.g. "user.get").
+     * @param handler Callable handling this method.
      *
-     * If a method with the same name already exists,
-     * it will be replaced.
+     * @note
+     * If a method with the same name already exists, it is replaced.
      */
     void add(std::string name, RpcHandler handler)
     {
@@ -82,7 +85,10 @@ namespace vix::webrpc
     }
 
     /**
-     * @brief Remove a method. Returns true if removed.
+     * @brief Remove a method by name.
+     *
+     * @param name Method name.
+     * @return True if a handler was removed.
      */
     bool remove(std::string_view name)
     {
@@ -90,7 +96,7 @@ namespace vix::webrpc
     }
 
     /**
-     * @brief Number of registered methods.
+     * @brief Get the number of registered methods.
      */
     std::size_t size() const noexcept
     {
@@ -98,7 +104,10 @@ namespace vix::webrpc
     }
 
     /**
-     * @brief Check if a method exists.
+     * @brief Check whether a method is registered.
+     *
+     * @param name Method name.
+     * @return True if the method exists.
      */
     bool has(std::string_view name) const noexcept
     {
@@ -106,11 +115,18 @@ namespace vix::webrpc
     }
 
     /**
-     * @brief Dispatch a parsed RPC request.
+     * @brief Dispatch a parsed request to its handler.
      *
+     * @param req       Parsed request.
+     * @param transport Optional transport label (e.g. "http", "websocket", "p2p").
+     * @param meta      Optional metadata map (e.g. headers, peer id).
+     * @return RpcResult containing either a success token or an RpcError.
+     *
+     * @details
      * This function:
-     * - validates the request
-     * - resolves the method
+     * - validates the request (method must be non-empty)
+     * - resolves the method in the registry
+     * - builds a Context view (zero-copy)
      * - executes the handler
      */
     RpcResult dispatch(const RpcRequest &req,
@@ -120,7 +136,6 @@ namespace vix::webrpc
       if (!req.valid())
         return RpcError::invalid_params("invalid rpc request");
 
-      // Note: lookup is by std::string key type.
       auto it = handlers_.find(req.method);
       if (it == handlers_.end())
         return RpcError::method_not_found(req.method);
@@ -137,9 +152,16 @@ namespace vix::webrpc
     }
 
     /**
-     * @brief Parse and dispatch from raw JSON token.
+     * @brief Convenience: parse a raw token and dispatch it.
      *
-     * This is a convenience helper.
+     * @param raw      Raw JSON token representing a request object.
+     * @param transport Optional transport label.
+     * @param meta     Optional metadata map.
+     * @return RpcResult containing either a success token or an RpcError.
+     *
+     * @note
+     * This helper only supports a single request object. Batch handling is typically
+     * implemented at a higher layer (dispatcher).
      */
     RpcResult dispatch(const vix::json::token &raw,
                        std::string_view transport = {},
