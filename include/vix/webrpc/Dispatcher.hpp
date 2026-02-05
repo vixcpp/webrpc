@@ -31,6 +31,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include <vix/json/Simple.hpp>
 
@@ -69,7 +70,7 @@ namespace vix::webrpc
       if (payload.is_array())
         return handle_batch(payload, transport, meta);
 
-      auto r = handle_one(payload, transport, meta);
+      const auto r = handle_one(payload, transport, meta);
       if (!r.has_value())
         return std::nullopt;
 
@@ -92,16 +93,17 @@ namespace vix::webrpc
       auto parsed = RpcRequest::parse(payload);
       if (std::holds_alternative<RpcError>(parsed))
       {
-        // Parse errors have no id to echo.
-        return RpcResponse::fail(vix::json::token{nullptr}, std::get<RpcError>(std::move(parsed)));
+        // Parse/invalid envelope: no reliable id to echo.
+        return RpcResponse::fail(vix::json::token{nullptr},
+                                 std::get<RpcError>(std::move(parsed)));
       }
 
-      const RpcRequest req = std::get<RpcRequest>(std::move(parsed));
+      RpcRequest req = std::get<RpcRequest>(std::move(parsed));
 
       // Notification: no response at all
       if (req.id.is_null())
       {
-        // Still dispatch if you want side effects.
+        // Still dispatch for side effects, ignore output.
         (void)router_.dispatch(req, transport, meta);
         return std::nullopt;
       }
@@ -118,24 +120,54 @@ namespace vix::webrpc
   private:
     const Router &router_;
 
+    /**
+     * @brief Handle a batch payload (array of calls).
+     *
+     * Spec behavior:
+     * - If payload is not an array -> PARSE_ERROR (but caller already checked is_array()).
+     * - If array is empty -> INVALID_PARAMS (empty batch).
+     * - Notifications produce no response entries.
+     * - If all are notifications -> nullopt.
+     */
     std::optional<vix::json::token> handle_batch(
         const vix::json::token &payload,
         std::string_view transport,
         const Context::MetaMap *meta) const
     {
+      using namespace vix::json;
+
       const auto ap = payload.as_array_ptr();
       if (!ap)
       {
-        // Should never happen if is_array() is correct, but keep it strict.
-        RpcResponse err = RpcResponse::fail(vix::json::token{nullptr}, RpcError::parse_error("batch must be an array"));
+        RpcResponse err = RpcResponse::fail(token{nullptr},
+                                            RpcError::parse_error("batch must be an array"));
         return err.to_json();
       }
 
-      vix::json::array_t out_arr;
+      // Empty batch is invalid (helps callers catch mistakes early)
+      if (ap->elems.empty())
+      {
+        RpcResponse err = RpcResponse::fail(token{nullptr},
+                                            RpcError::invalid_params("batch must not be empty"));
+        return err.to_json();
+      }
+
+      array_t out_arr;
       out_arr.elems.reserve(ap->elems.size());
 
       for (const auto &item : ap->elems)
       {
+        // Each item must be an object (request envelope).
+        // If not, we return an error response entry (id = null).
+        // We do NOT abort the entire batch; we keep processing.
+        if (!item.is_object())
+        {
+          RpcResponse r = RpcResponse::fail(token{nullptr},
+                                            RpcError::parse_error("batch item must be an object"));
+          out_arr.elems.push_back(r.to_json());
+          continue;
+        }
+
         auto resp = handle_one(item, transport, meta);
         if (!resp.has_value())
           continue; // notification
@@ -147,7 +179,7 @@ namespace vix::webrpc
       if (out_arr.elems.empty())
         return std::nullopt;
 
-      return vix::json::token(out_arr);
+      return token(out_arr);
     }
   };
 

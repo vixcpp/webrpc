@@ -61,15 +61,12 @@ namespace vix::webrpc
     {
     }
 
-    bool has_id() const noexcept
-    {
-      return !id.is_null();
-    }
+    bool has_id() const noexcept { return !id.is_null(); }
+    bool valid() const noexcept { return !method.empty(); }
 
-    bool valid() const noexcept
-    {
-      return !method.empty();
-    }
+    // ------------------------------------------------------------
+    // Serialization
+    // ------------------------------------------------------------
 
     vix::json::token to_json() const
     {
@@ -86,6 +83,10 @@ namespace vix::webrpc
 
       return token(o);
     }
+
+    // ------------------------------------------------------------
+    // Parsing
+    // ------------------------------------------------------------
 
     /**
      * @brief Parse a RpcRequest from a vix::json::token.
@@ -104,6 +105,7 @@ namespace vix::webrpc
 
       const kvs &o = *objp;
 
+      // method (required, non-empty string)
       const token *m = o.get_ptr("method");
       if (!m)
         return RpcError::invalid_params("missing field: method");
@@ -112,6 +114,7 @@ namespace vix::webrpc
       if (!ms || ms->empty())
         return RpcError::invalid_params("method must be a non-empty string");
 
+      // id (optional: null|string|int)
       token id_tok{nullptr};
       if (const token *idp = o.get_ptr("id"))
       {
@@ -120,18 +123,25 @@ namespace vix::webrpc
           return RpcError::invalid_params("id must be string, int, or null");
       }
 
+      // params (optional: any)
       token params_tok{nullptr};
       if (const token *pp = o.get_ptr("params"))
-      {
         params_tok = *pp;
-      }
 
       return RpcRequest{std::move(id_tok), *ms, std::move(params_tok)};
     }
 
+    // ------------------------------------------------------------
+    // Params helpers
+    // ------------------------------------------------------------
+
     /**
      * @brief Extract params as object if possible.
-     * Returns nullptr if params is not an object.
+     * @return pointer to object storage or nullptr.
+     *
+     * Note: vix::json::token stores object/array via shared_ptr internally,
+     * so this pointer remains valid as long as *this is alive and params
+     * is not reassigned.
      */
     const vix::json::kvs *params_object_ptr() const noexcept
     {
@@ -141,12 +151,23 @@ namespace vix::webrpc
 
     /**
      * @brief Extract params as array if possible.
-     * Returns nullptr if params is not an array.
+     * @return pointer to array storage or nullptr.
      */
     const vix::json::array_t *params_array_ptr() const noexcept
     {
       const auto p = params.as_array_ptr();
       return p ? p.get() : nullptr;
+    }
+
+    /**
+     * @brief Convenience: get param token by key when params is an object.
+     * @return nullptr if params is not object or key missing.
+     */
+    const vix::json::token *param_ptr(std::string_view key) const noexcept
+    {
+      if (const auto *o = params_object_ptr())
+        return o->get_ptr(key);
+      return nullptr;
     }
   };
 

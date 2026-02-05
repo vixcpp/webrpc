@@ -82,6 +82,22 @@ namespace vix::webrpc
     }
 
     /**
+     * @brief Remove a method. Returns true if removed.
+     */
+    bool remove(std::string_view name)
+    {
+      return handlers_.erase(std::string(name)) > 0;
+    }
+
+    /**
+     * @brief Number of registered methods.
+     */
+    std::size_t size() const noexcept
+    {
+      return handlers_.size();
+    }
+
+    /**
      * @brief Check if a method exists.
      */
     bool has(std::string_view name) const noexcept
@@ -104,6 +120,7 @@ namespace vix::webrpc
       if (!req.valid())
         return RpcError::invalid_params("invalid rpc request");
 
+      // Note: lookup is by std::string key type.
       auto it = handlers_.find(req.method);
       if (it == handlers_.end())
         return RpcError::method_not_found(req.method);

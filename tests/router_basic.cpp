@@ -15,7 +15,7 @@ static void test_router_dispatch_ok()
 
   r.add("math.add", [](const Context &ctx) -> RpcResult
         {
-          const auto *p = ctx.params.as_object_ptr();
+          const auto *p = ctx.params_object_ptr();
           if (!p)
             return RpcError::invalid_params("params must be an object");
 
@@ -25,8 +25,8 @@ static void test_router_dispatch_ok()
           if (!a_t || !b_t || !a_t->is_i64() || !b_t->is_i64())
             return RpcError::invalid_params("a and b must be int");
 
-          const long long a = a_t->as_i64_or(0);
-          const long long b = b_t->as_i64_or(0);
+          const long long a = static_cast<long long>(a_t->as_i64_or(0));
+          const long long b = static_cast<long long>(b_t->as_i64_or(0));
 
           return obj({
               "sum", a + b,
@@ -75,7 +75,7 @@ static void test_router_method_not_found()
 
   auto dp = err.details.as_object_ptr();
   assert(dp);
-  assert(dp->get_string_or("method") == "missing.method");
+  assert(dp->get_string_or("method", "") == "missing.method");
 }
 
 static void test_router_invalid_request()

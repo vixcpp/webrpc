@@ -25,8 +25,8 @@ static void test_basic_error_serialization()
 
   const kvs &o = *objp;
 
-  assert(o.get_string_or("code") == "METHOD_NOT_FOUND");
-  assert(o.get_string_or("message") == "RPC method not found");
+  assert(o.get_string_or("code", "") == "METHOD_NOT_FOUND");
+  assert(o.get_string_or("message", "") == "RPC method not found");
 
   const token *details = o.get_ptr("details");
   assert(details && "details must exist");
@@ -34,7 +34,7 @@ static void test_basic_error_serialization()
   auto dp = details->as_object_ptr();
   assert(dp && "details must be an object");
 
-  assert(dp->get_string_or("method") == "user.get");
+  assert(dp->get_string_or("method", "") == "user.get");
 }
 
 static void test_error_without_details()
@@ -51,8 +51,8 @@ static void test_error_without_details()
 
   const kvs &o = *objp;
 
-  assert(o.get_string_or("code") == "INVALID_PARAMS");
-  assert(o.get_string_or("message") == "Invalid RPC parameters");
+  assert(o.get_string_or("code", "") == "INVALID_PARAMS");
+  assert(o.get_string_or("message", "") == "Invalid RPC parameters");
   assert(o.get_ptr("details") == nullptr && "details must be absent");
 }
 
@@ -70,9 +70,9 @@ static void test_error_parse_roundtrip()
   token serialized = original.to_json();
 
   auto parsed = RpcError::parse(serialized);
-  assert(std::holds_alternative<RpcError>(parsed));
+  assert(parsed.ok() && "RpcError::parse should succeed");
 
-  const RpcError &err = std::get<RpcError>(parsed);
+  const RpcError &err = parsed.value();
 
   assert(err.code == "PARSE_ERROR");
   assert(err.message == "Failed to parse RPC payload");
@@ -80,7 +80,7 @@ static void test_error_parse_roundtrip()
 
   auto dp = err.details.as_object_ptr();
   assert(dp);
-  assert(dp->get_string_or("reason") == "invalid json");
+  assert(dp->get_string_or("reason", "") == "invalid json");
 }
 
 int main()

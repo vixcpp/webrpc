@@ -64,6 +64,7 @@ namespace vix::webrpc
       RpcResponse r;
       r.id = std::move(id_);
       r.result = std::move(result_);
+      r.error = RpcError{};
       r.has_error = false;
       return r;
     }
@@ -72,20 +73,18 @@ namespace vix::webrpc
     {
       RpcResponse r;
       r.id = std::move(id_);
+      r.result = vix::json::token(nullptr);
       r.error = std::move(err);
       r.has_error = true;
       return r;
     }
 
-    bool is_notification() const noexcept
-    {
-      return id.is_null();
-    }
+    bool is_notification() const noexcept { return id.is_null(); }
+    bool ok() const noexcept { return !has_error; }
 
-    bool ok() const noexcept
-    {
-      return !has_error;
-    }
+    // ------------------------------------------------------------
+    // Serialization
+    // ------------------------------------------------------------
 
     /**
      * @brief Convert response to vix::json::token (object).
@@ -112,23 +111,32 @@ namespace vix::webrpc
       });
     }
 
+    // ------------------------------------------------------------
+    // Parsing
+    // ------------------------------------------------------------
+
     /**
      * @brief Parse a RpcResponse from a vix::json::token.
      *
      * Returns:
      * - RpcResponse on success
      * - RpcError on malformed envelope (PARSE_ERROR / INVALID_PARAMS)
+     *
+     * Notes:
+     * - We validate: id type, XOR rule (result vs error),
+     *   and error shape using RpcError::parse().
      */
     static std::variant<RpcResponse, RpcError> parse(const vix::json::token &root)
     {
       using namespace vix::json;
 
-      auto objp = root.as_object_ptr();
+      const auto objp = root.as_object_ptr();
       if (!objp)
         return RpcError::parse_error("response must be an object");
 
       const kvs &o = *objp;
 
+      // id (optional: null|string|int)
       token id_tok{nullptr};
       if (const token *idp = o.get_ptr("id"))
       {
@@ -140,49 +148,34 @@ namespace vix::webrpc
       const token *res_p = o.get_ptr("result");
       const token *err_p = o.get_ptr("error");
 
+      // result XOR error
       if (res_p && err_p)
         return RpcError::invalid_params("response cannot contain both result and error");
 
       if (!res_p && !err_p)
         return RpcError::invalid_params("response must contain result or error");
 
+      // error branch
       if (err_p)
       {
-        auto eobjp = err_p->as_object_ptr();
-        if (!eobjp)
-          return RpcError::invalid_params("error must be an object");
-
-        const kvs &eobj = *eobjp;
-
-        const token *code_p = eobj.get_ptr("code");
-        const token *msg_p = eobj.get_ptr("message");
-
-        if (!code_p || !msg_p)
-          return RpcError::invalid_params("error must contain code and message");
-
-        const std::string *code_s = code_p->as_string();
-        const std::string *msg_s = msg_p->as_string();
-
-        if (!code_s || code_s->empty())
-          return RpcError::invalid_params("error.code must be a non-empty string");
-
-        if (!msg_s)
-          return RpcError::invalid_params("error.message must be a string");
-
-        token details_tok{nullptr};
-        if (const token *dp = eobj.get_ptr("details"))
-          details_tok = *dp;
+        // Let RpcError validate its own schema
+        const auto pr = RpcError::parse(*err_p);
+        if (!pr.ok())
+          return pr.error(); // malformed error object -> return parse_error RpcError
 
         RpcResponse out;
         out.id = std::move(id_tok);
-        out.error = RpcError{*code_s, *msg_s, std::move(details_tok)};
+        out.result = token(nullptr);
+        out.error = pr.value();
         out.has_error = true;
         return out;
       }
 
+      // success branch
       RpcResponse out;
       out.id = std::move(id_tok);
       out.result = *res_p; // copy token
+      out.error = RpcError{};
       out.has_error = false;
       return out;
     }
