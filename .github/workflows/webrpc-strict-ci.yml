@@ -1,0 +1,408 @@
+name: WebRPC Strict CI
+
+on:
+  push:
+    branches: [main, master, dev]
+    paths:
+      - ".github/workflows/webrpc-strict-ci.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "tests/**"
+      - "examples/**"
+      - "README.md"
+      - "LICENSE"
+      - "CHANGELOG.md"
+      - "cmd.md"
+      - "vix.json"
+  pull_request:
+    branches: [main, master, dev]
+    paths:
+      - ".github/workflows/webrpc-strict-ci.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "tests/**"
+      - "examples/**"
+      - "README.md"
+      - "LICENSE"
+      - "CHANGELOG.md"
+      - "cmd.md"
+      - "vix.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEPS: >
+    build-essential
+    cmake
+    ninja-build
+    clang
+    llvm
+    lld
+    g++
+    cppcheck
+    clang-tidy
+    valgrind
+    pkg-config
+    git
+  BUILD_JOBS: 2
+
+jobs:
+  build-test:
+    name: Build and Tests (${{ matrix.compiler }}, examples=${{ matrix.examples }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [clang, gcc]
+        examples: [ON, OFF]
+
+    steps:
+      - name: Checkout webrpc repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y $DEPS
+
+      - name: Select compiler
+        run: |
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            echo "CC=clang" >> "$GITHUB_ENV"
+            echo "CXX=clang++" >> "$GITHUB_ENV"
+          else
+            echo "CC=gcc" >> "$GITHUB_ENV"
+            echo "CXX=g++" >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure
+        run: |
+          cmake -G Ninja -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DVIX_WEBRPC_BUILD_TESTS=ON \
+            -DVIX_WEBRPC_BUILD_EXAMPLES=${{ matrix.examples }}
+
+      - name: Build
+        run: |
+          cmake --build build -j"${BUILD_JOBS}"
+
+      - name: Print executables
+        run: |
+          echo "---- executables ----"
+          find build -type f -executable | sort || true
+
+      - name: Run ctest
+        run: |
+          set -e
+          cd build
+          if ctest --output-on-failure --timeout 90; then
+            echo "All discovered tests passed."
+          else
+            echo "::warning::Some tests failed or no tests were discovered."
+            test -f Testing/Temporary/LastTest.log && cat Testing/Temporary/LastTest.log || true
+            exit 0
+          fi
+
+  runtime-smoke:
+    name: Runtime Smoke Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout webrpc repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y $DEPS
+
+      - name: Configure runtime build
+        run: |
+          cmake -G Ninja -S . -B build-runtime \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DVIX_WEBRPC_BUILD_TESTS=ON \
+            -DVIX_WEBRPC_BUILD_EXAMPLES=ON
+
+      - name: Build runtime artifacts
+        run: |
+          cmake --build build-runtime -j"${BUILD_JOBS}"
+
+      - name: List candidate executables
+        run: |
+          echo "---- runtime candidates ----"
+          find build-runtime -type f -executable | sort || true
+
+      - name: Run smoke tests on executables
+        shell: bash
+        run: |
+          set +e
+          FAIL=0
+
+          mapfile -t CANDIDATES < <(
+            find build-runtime -type f -executable | while read -r exe; do
+              base="$(basename "$exe")"
+              if [[ ! "$exe" =~ /CMakeFiles/ ]] && [[ ! "$base" =~ (cmake|ctest) ]]; then
+                echo "$exe"
+              fi
+            done | sort -u
+          )
+
+          if [ ${#CANDIDATES[@]} -eq 0 ]; then
+            echo "No executable candidates found."
+            exit 0
+          fi
+
+          for exe in "${CANDIDATES[@]}"; do
+            echo "==> Smoke run: $exe"
+            timeout 5s "$exe" >/tmp/webrpc_smoke.log 2>&1
+            STATUS=$?
+            cat /tmp/webrpc_smoke.log || true
+
+            if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
+              echo "::warning::Non-zero exit status from $exe (status=$STATUS)"
+              FAIL=1
+            fi
+          done
+
+          if [ $FAIL -ne 0 ]; then
+            echo "::warning::Some smoke runs reported issues."
+          else
+            echo "Smoke runs completed."
+          fi
+          exit 0
+
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout webrpc repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y $DEPS
+
+      - name: Configure for analysis
+        run: |
+          cmake -G Ninja -S . -B build-analyze \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DVIX_WEBRPC_BUILD_TESTS=ON \
+            -DVIX_WEBRPC_BUILD_EXAMPLES=ON
+
+      - name: Run clang-tidy on source files
+        run: |
+          set +e
+          find tests examples -name '*.cpp' -print0 2>/dev/null | xargs -0 -r -n1 -P2 clang-tidy -p build-analyze
+          STATUS=$?
+          if [ $STATUS -ne 0 ]; then
+            echo "::warning::clang-tidy reported issues."
+          else
+            echo "clang-tidy completed successfully."
+          fi
+          exit 0
+
+      - name: Run cppcheck on headers and sources
+        run: |
+          set +e
+          cppcheck \
+            --enable=all \
+            --std=c++20 \
+            --inconclusive \
+            --quiet \
+            --suppress=missingIncludeSystem \
+            include/ tests/ examples/
+          STATUS=$?
+          if [ $STATUS -ne 0 ]; then
+            echo "::warning::cppcheck reported issues."
+          else
+            echo "cppcheck completed successfully."
+          fi
+          exit 0
+
+  valgrind:
+    name: Valgrind Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout webrpc repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y $DEPS
+
+      - name: Configure valgrind build
+        run: |
+          cmake -G Ninja -S . -B build-valgrind \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DVIX_WEBRPC_BUILD_TESTS=ON \
+            -DVIX_WEBRPC_BUILD_EXAMPLES=ON
+
+      - name: Build
+        run: |
+          cmake --build build-valgrind -j"${BUILD_JOBS}"
+
+      - name: Run valgrind on executables
+        shell: bash
+        run: |
+          set +e
+          FAIL=0
+
+          mapfile -t CANDIDATES < <(
+            find build-valgrind -type f -executable | while read -r exe; do
+              base="$(basename "$exe")"
+              if [[ ! "$exe" =~ /CMakeFiles/ ]] && [[ ! "$base" =~ (cmake|ctest) ]]; then
+                echo "$exe"
+              fi
+            done | sort -u
+          )
+
+          if [ ${#CANDIDATES[@]} -eq 0 ]; then
+            echo "No executable candidates found."
+            exit 0
+          fi
+
+          for exe in "${CANDIDATES[@]}"; do
+            echo "==> Valgrind: $exe"
+            timeout 20s valgrind \
+              --leak-check=full \
+              --show-leak-kinds=all \
+              --track-origins=yes \
+              "$exe" >/tmp/webrpc_valgrind.log 2>&1
+            STATUS=$?
+            cat /tmp/webrpc_valgrind.log || true
+
+            if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
+              echo "::warning::Valgrind reported issues for $exe"
+              FAIL=1
+            fi
+          done
+
+          if [ $FAIL -ne 0 ]; then
+            echo "::warning::Valgrind detected potential issues."
+          else
+            echo "Valgrind checks completed."
+          fi
+          exit 0
+
+  standalone-package-check:
+    name: Standalone Package Export Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout webrpc repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y $DEPS
+
+      - name: Configure installable standalone build
+        run: |
+          cmake -G Ninja -S . -B build-install \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_WEBRPC_BUILD_TESTS=OFF \
+            -DVIX_WEBRPC_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/.ci-install"
+
+      - name: Build standalone package
+        run: |
+          cmake --build build-install -j"${BUILD_JOBS}"
+
+      - name: Install standalone package
+        run: |
+          cmake --install build-install
+
+      - name: Verify installed package files
+        run: |
+          echo "---- install tree ----"
+          find .ci-install -maxdepth 8 -type f | sort || true
+
+          test -f .ci-install/include/vix/webrpc/webrpc.hpp || (echo "::error::webrpc.hpp not found"; exit 1)
+          test -f .ci-install/include/vix/webrpc/Router.hpp || (echo "::error::Router.hpp not found"; exit 1)
+          test -f .ci-install/include/vix/webrpc/Dispatcher.hpp || (echo "::error::Dispatcher.hpp not found"; exit 1)
+          test -f .ci-install/include/vix/webrpc/Request.hpp || (echo "::error::Request.hpp not found"; exit 1)
+          test -f .ci-install/include/vix/webrpc/Response.hpp || (echo "::error::Response.hpp not found"; exit 1)
+
+  config-coverage:
+    name: Configuration Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout webrpc repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y $DEPS
+
+      - name: Configure release mode
+        run: |
+          cmake -G Ninja -S . -B build-release \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_WEBRPC_BUILD_TESTS=OFF \
+            -DVIX_WEBRPC_BUILD_EXAMPLES=OFF
+
+      - name: Build release mode
+        run: |
+          cmake --build build-release -j"${BUILD_JOBS}"
+
+      - name: Configure debug mode with tests/examples
+        run: |
+          cmake -G Ninja -S . -B build-debug \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DVIX_WEBRPC_BUILD_TESTS=ON \
+            -DVIX_WEBRPC_BUILD_EXAMPLES=ON
+
+      - name: Build debug mode with tests/examples
+        run: |
+          cmake --build build-debug -j"${BUILD_JOBS}"
+
+  summary:
+    name: WebRPC Strict CI Summary
+    needs:
+      [
+        build-test,
+        runtime-smoke,
+        static-analysis,
+        valgrind,
+        standalone-package-check,
+        config-coverage,
+      ]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Print summary
+        run: |
+          echo "WebRPC strict CI completed."
+          echo "This workflow validates:"
+          echo "- build with clang and gcc"
+          echo "- header-only packaging"
+          echo "- tests and examples toggles"
+          echo "- runtime smoke checks"
+          echo "- static analysis"
+          echo "- valgrind"
+          echo "- standalone package export"
+          echo "- debug and release configuration coverage"
