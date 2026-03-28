@@ -47,6 +47,7 @@ env:
     pkg-config
     git
   BUILD_JOBS: 2
+  VIX_GIT_BRANCH: dev
 
 jobs:
   build-test:
@@ -68,6 +69,18 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y $DEPS
+
+      - name: Fetch sibling json
+        run: |
+          rm -rf ../json
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
+          test -f ../json/CMakeLists.txt || (echo "::error::../json/CMakeLists.txt is missing"; exit 1)
+          test -f ../json/include/vix/json/Simple.hpp || (echo "::error::../json/include/vix/json/Simple.hpp is missing"; exit 1)
+
+      - name: Export json include path
+        run: |
+          echo "CPATH=$GITHUB_WORKSPACE/../json/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$GITHUB_WORKSPACE/../json/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
       - name: Select compiler
         run: |
@@ -122,6 +135,18 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y $DEPS
+
+      - name: Fetch sibling json
+        run: |
+          rm -rf ../json
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
+          test -f ../json/CMakeLists.txt || (echo "::error::../json/CMakeLists.txt is missing"; exit 1)
+          test -f ../json/include/vix/json/Simple.hpp || (echo "::error::../json/include/vix/json/Simple.hpp is missing"; exit 1)
+
+      - name: Export json include path
+        run: |
+          echo "CPATH=$GITHUB_WORKSPACE/../json/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$GITHUB_WORKSPACE/../json/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
       - name: Configure runtime build
         run: |
@@ -193,6 +218,17 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y $DEPS
 
+      - name: Fetch sibling json
+        run: |
+          rm -rf ../json
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
+          test -f ../json/include/vix/json/Simple.hpp || (echo "::error::../json/include/vix/json/Simple.hpp is missing"; exit 1)
+
+      - name: Export json include path
+        run: |
+          echo "CPATH=$GITHUB_WORKSPACE/../json/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$GITHUB_WORKSPACE/../json/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
+
       - name: Configure for analysis
         run: |
           cmake -G Ninja -S . -B build-analyze \
@@ -246,6 +282,17 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y $DEPS
+
+      - name: Fetch sibling json
+        run: |
+          rm -rf ../json
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
+          test -f ../json/include/vix/json/Simple.hpp || (echo "::error::../json/include/vix/json/Simple.hpp is missing"; exit 1)
+
+      - name: Export json include path
+        run: |
+          echo "CPATH=$GITHUB_WORKSPACE/../json/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$GITHUB_WORKSPACE/../json/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
       - name: Configure valgrind build
         run: |
@@ -342,6 +389,7 @@ jobs:
           test -f .ci-install/include/vix/webrpc/Dispatcher.hpp || (echo "::error::Dispatcher.hpp not found"; exit 1)
           test -f .ci-install/include/vix/webrpc/Request.hpp || (echo "::error::Request.hpp not found"; exit 1)
           test -f .ci-install/include/vix/webrpc/Response.hpp || (echo "::error::Response.hpp not found"; exit 1)
+          test -f .ci-install/include/vix/webrpc/Error.hpp || (echo "::error::Error.hpp not found"; exit 1)
 
   config-coverage:
     name: Configuration Coverage
@@ -357,6 +405,17 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y $DEPS
+
+      - name: Fetch sibling json
+        run: |
+          rm -rf ../json
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
+          test -f ../json/include/vix/json/Simple.hpp || (echo "::error::../json/include/vix/json/Simple.hpp is missing"; exit 1)
+
+      - name: Export json include path
+        run: |
+          echo "CPATH=$GITHUB_WORKSPACE/../json/include${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$GITHUB_WORKSPACE/../json/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
       - name: Configure release mode
         run: |
@@ -400,6 +459,7 @@ jobs:
           echo "This workflow validates:"
           echo "- build with clang and gcc"
           echo "- header-only packaging"
+          echo "- json include wiring for tests/examples"
           echo "- tests and examples toggles"
           echo "- runtime smoke checks"
           echo "- static analysis"
