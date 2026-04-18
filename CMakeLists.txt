@@ -77,15 +77,6 @@ target_link_libraries(vix_webrpc INTERFACE
   vix::json
 )
 
-# Optional umbrella helpers (if the parent project provides them)
-if (TARGET vix_warnings)
-  target_link_libraries(vix_webrpc INTERFACE vix_warnings)
-endif()
-
-if (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
-  target_link_libraries(vix_webrpc INTERFACE vix_sanitizers)
-endif()
-
 # Install target + headers
 install(TARGETS vix_webrpc
   EXPORT VixTargets
