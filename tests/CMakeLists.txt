@@ -17,10 +17,30 @@ foreach(target
   webrpc_error_serialization
   webrpc_router_basic
 )
-  target_compile_features(${target} PRIVATE cxx_std_20)
-  target_link_libraries(${target} PRIVATE vix::webrpc)
+  target_compile_features(${target}
+    PRIVATE
+      cxx_std_20
+  )
+
+  target_link_libraries(${target}
+    PRIVATE
+      vix::webrpc
+  )
+
+  if (VIX_ENABLE_SANITIZERS AND NOT MSVC)
+    target_compile_options(${target}
+      PRIVATE
+        -fno-omit-frame-pointer
+        -fsanitize=address,undefined
+    )
+
+    target_link_options(${target}
+      PRIVATE
+        -fsanitize=address,undefined
+    )
+  endif()
 endforeach()
 
 # Register tests with CTest
 add_test(NAME webrpc.error_serialization COMMAND webrpc_error_serialization)
-add_test(NAME webrpc.router_basic        COMMAND webrpc_router_basic)
+add_test(NAME webrpc.router_basic COMMAND webrpc_router_basic)
