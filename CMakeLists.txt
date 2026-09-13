@@ -66,6 +66,10 @@ endif()
 add_library(vix_webrpc INTERFACE)
 add_library(vix::webrpc ALIAS vix_webrpc)
 
+set_target_properties(vix_webrpc PROPERTIES
+  EXPORT_NAME webrpc
+)
+
 target_compile_features(vix_webrpc INTERFACE cxx_std_20)
 
 target_include_directories(vix_webrpc INTERFACE
